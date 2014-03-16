@@ -1,0 +1,249 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<project name="DoiRegistration" default="all" basedir=".">
+  <property environment="env"/>
+  <property file="build.properties"/>
+  <property name="hostname" value="${env.HOSTNAME}"/>
+
+  <target name="all" depends="clean, init, drupal, drush, httpd, iptables, site-install, modules, archive-restore, html, dropzone, d2rq, saxon, canoo, final_message" description="Install all"/>
+
+  <target name="full" depends="all, tools" description="After Install all, it start to install IUGONET Metadata Editor" />
+
+  <target name="clean" description="Clean">
+    <delete dir="/var/www/html"/>
+    <mkdir dir="/var/www/html"/>
+    <exec executable="/etc/init.d/httpd">
+      <arg line="stop"/>
+    </exec>
+  </target>
+
+  <target name="getIpAddress" description="Get IP Address">
+    <exec executable="/bin/bash" outputproperty="ip_address">
+      <arg value="-c" />
+      <arg value="/sbin/ifconfig | awk '{if (NR==2){sub(&quot;addr:&quot;,&quot;&quot;,$2);print $2}}'" />
+    </exec>
+  </target>
+
+  <target name="init" description="Initialize">
+    <mkdir dir="${src}"/>
+    <exec executable="yum">
+      <arg line="-y install php php-common php-pdo php-gd php-xml php-mbstring php-pear ImageMagick mysql-server php-mysql"/>
+    </exec>
+    <exec executable="/etc/init.d/mysqld">
+      <arg value="start" />
+    </exec>
+    <sleep seconds="15" />
+    <exec executable="mysql">
+      <arg line="-e 'create database wdsj'" />
+    </exec>
+    <exec executable="bash">
+      <arg value="-c" />
+      <arg value="mysql -D wdsj &lt; sql/wdsj.sql" />
+    </exec>
+
+    <exec executable="mysql">
+      <arg value="-e" />
+      <arg line="'CREATE USER selectOnlyUser@localhost IDENTIFIED BY &quot;pass&quot;'" />
+    </exec>
+    <exec executable="mysql">
+      <arg value="-e" />
+      <arg line="'GRANT select ON *.* TO selectOnlyUser@localhost'" />
+    </exec>
+    <exec executable="mysql">
+      <arg line="-e 'flush privileges'" />
+    </exec>
+
+    <exec executable="mysql">
+      <arg value="-e" />
+      <arg line="'CREATE USER insertOnlyUser@localhost IDENTIFIED BY &quot;pass&quot;'" />
+    </exec>
+    <exec executable="mysql">
+      <arg value="-e" />
+      <arg line="'GRANT insert ON *.* TO insertOnlyUser@localhost'" />
+    </exec>
+    <exec executable="mysql">
+      <arg line="-e 'flush privileges'" />
+    </exec>
+
+    <antcall target="mysql" />
+
+    <exec executable="setenforce">
+      <arg value="0" />
+    </exec>
+    <replace file="/etc/selinux/config" token="SELINUX=enforcing" value="SELINUX=permissive" />
+
+    <antcall target="getIpAddress" />
+  </target>
+
+  <target name="mysql">
+    <exec executable="chkconfig">
+      <arg value="mysqld" />
+      <arg value="on" />
+    </exec>
+  </target>
+
+  <target name="html" description="Copy html directory into /var/www">
+    <copy todir="/var/www/html">
+      <fileset dir="html" />
+    </copy>
+    <chown owner="apache" >
+      <fileset dir="/var/www/html/uploads" />
+      <dirset dir="/var/www/html/uploads" />
+    </chown>
+    <chgrp group="apache" >
+      <fileset dir="/var/www/html/uploads" />
+      <dirset dir="/var/www/html/uploads" />
+    </chgrp>
+  </target>
+
+  <target name="dropzone" description="Download dropzone and install it">
+    <get src="${src_dropzone}" dest="${dst_dropzone}" usetimestamp="true"/>
+    <unzip src="${dst_dropzone}" dest="${src}"/>
+    <copy todir="/var/www/html/${dropzone_prefix}" overwrite="true">
+      <fileset dir="${src}/${dropzone_prefix}" />
+    </copy>
+  </target>
+
+  <target name="drupal" description="Install drupal">
+    <get src="${src_drupal}" dest="${dst_drupal}" usetimestamp="true"/>
+    <unzip src="${dst_drupal}" dest="${src}"/>
+    <copy todir="/var/www/html">
+      <fileset dir="${src}/${drupal_prefix}"/>
+    </copy>
+    <exec executable="php" dir="/var/www/html">
+      <arg value="/var/www/html/install.php"/>
+    </exec>
+    <copy file="/var/www/html/sites/default/default.settings.php" tofile="/var/www/html/sites/default/settings.php"/>
+    <chmod dir="/var/www/html/sites/default" perm="777"/>
+    <chmod dir="/var/www/html/sites/default/settings.php" perm="666"/>
+    <!-- drush archive-backup & archive-restore routine doesn't work for default. To stay away from the issue, you have to execute below.-->
+    <exec executable="ln">
+      <arg value="-s"/>
+      <arg value="/var/www/html/sites"/>
+      <arg value="/var/www/sites"/>
+    </exec>
+  </target>
+
+  <target name="modules" description="Install modules">
+    <exec executable="drush" dir="${modules_dir}">
+      <arg line="pm-download services ctools libraries oauth views sparql sparql_views entity"/>
+    </exec>
+    <!-- -->
+    <exec executable="drush" dir="/var/www/html">
+      <arg line="-y php oauth_common oauth_common_providerui services_oauth ctools services libraries rest_server xmlrpc_server views views_ui rdfx sparql sparql_views rdfui entity_token evoc sparql_endpoint" />
+    </exec>
+  </target>
+
+  <target name="final_message" description="Show final message.">
+    <echo message="access to http://localhost/"/>
+  </target>
+
+  <target name="httpd" description="Start httpd">
+    <exec executable="/etc/init.d/httpd">
+      <arg line="start"/>
+    </exec>
+    <exec executable="chkconfig">
+      <arg line="httpd on"/>
+    </exec>
+  </target>
+
+  <target name="drush" description="Install drush">
+    <exec executable="pear">
+      <arg value="channel-discover"/>
+      <arg value="${drush_server}"/>
+    </exec>
+    <exec executable="pear">
+      <arg value="install"/>
+      <arg value="drush/drush"/>
+    </exec>
+  </target>
+
+  <target name="iptables" description="Set iptables">
+    <exec executable="iptables" dir="/sbin">
+      <arg line="-I INPUT 5 -p tcp --dport http -j ACCEPT"/>
+    </exec>
+    <exec executable="iptables" dir="/sbin">
+      <arg line="-I INPUT 5 -p tcp --dport https -j ACCEPT"/>
+    </exec>
+    <exec executable="service" dir="/sbin">
+      <arg line="iptables save"/>
+    </exec>
+  </target>
+
+  <target name="site-install" description="Install contents of the web site">
+    <mkdir dir="/var/www/html/sites/default/files"/>
+    <chown file="/var/www/html/sites/default/files" owner="apache"/>
+    <chgrp file="/var/www/html/sites/default/files" group="apache"/>
+    <exec executable="drush" dir="/var/www/html">
+      <arg line="-y site-install standard --clean-url=0 --db-url=sqlite:sites/default/files/.ht.sqlite --account-name=${account_name} --account-pass=${account_pass} --account-mail=${account_mail} --site-name=${site_name} --site-mail=${site_mail}" />
+    </exec>
+    <chown owner="apache" >
+      <fileset dir="/var/www/html/sites/default/files" />
+      <dirset dir="/var/www/html/sites/default/files" />
+    </chown>
+    <chgrp group="apache" >
+      <fileset dir="/var/www/html/sites/default/files" />
+      <dirset dir="/var/www/html/sites/default/files" />
+    </chgrp>
+  </target>
+
+  <target name="archive-dump" description="Archive-dump">
+    <!-- -->
+    <delete dir="/var/www/html/tools"/>
+    <delete dir="/var/www/html/uploads"/>
+    <exec executable="drush" dir="/var/www/html">
+      <arg line="archive-dump --destination=${env.PWD}/${drush_backup}"/>
+    </exec>
+  </target>
+
+  <target name="archive-restore" description="archive-restore">
+    <delete dir="/var/www/html"/>    
+    <exec executable="drush" dir="/var/www">
+      <arg line="archive-restore ${env.PWD}/${drush_backup}"/>
+    </exec>
+  </target>     
+
+  <target name="d2rq" description="Install D2RQ">
+    <get src="${src_d2rq}" dest="${dst_d2rq}" usetimestamp="true"/>
+    <exec executable="tar" dir="${src}">
+      <arg line="xvzf ${dst_d2rq}" />
+    </exec>
+    <copy todir="/var/www/html/${d2rq_prefix}">
+      <fileset dir="${src}/${d2rq_prefix}"/>
+    </copy>
+    <chmod perm="gou+x" file="/var/www/html/${d2rq_prefix}/d2r-query" />
+    <chmod perm="gou+x" file="/var/www/html/${d2rq_prefix}/d2r-server" />
+    <chmod perm="gou+x" file="/var/www/html/${d2rq_prefix}/dump-rdf" />
+    <chmod perm="gou+x" file="/var/www/html/${d2rq_prefix}/generate-mapping" />
+    <exec executable="./generate-mapping" dir="/var/www/html/${d2rq_prefix}">
+      <arg line="-o iugonet.ttl -d com.mysql.jdbc.Driver -u root jdbc:mysql://localhost/iugonet" />
+    </exec>
+    <exec executable="./d2r-server" dir="/var/www/html/${d2rq_prefix}" spawn="true">
+      <arg line="iugonet.ttl" />
+    </exec>
+  </target>
+
+  <target name="saxon" description="Install saxon-he">
+    <get src="${src_saxon}" dest="${dst_saxon}" usetimestamp="true"/>
+    <unzip src="${dst_saxon}" dest="${src}"/>
+    <mkdir dir="/var/www/html/saxon/lib" />
+    <copy todir="/var/www/html/saxon/lib">
+      <fileset file="${src}/saxon9he.jar" />
+      <fileset file="${src}/saxon9-unpack.jar" />
+    </copy>
+  </target>
+
+  <target name="canoo" description="Install canoo">
+    <get src="${src_canoo}" dest="${dst_canoo}" usetimestamp="true"/>
+    <unzip src="${dst_canoo}" dest="${src}/canoo"/>
+  </target>
+
+  <target name="tools" description="Install tools">
+    <subant target="all">
+      <fileset dir="../IugonetMetadataEditor" includes="**/build.xml" />
+    </subant>
+    <subant target="install">
+      <fileset dir="../IugonetMetadataEditor" includes="**/build.xml" />
+    </subant>
+  </target>
+  
+</project>
